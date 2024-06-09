@@ -1,0 +1,101 @@
+import platform
+import psutil
+import subprocess
+import GPUtil
+
+def get_windows_version():
+    try:
+        output = subprocess.check_output("wmic os get Caption", shell=True).decode().strip().split('\n')
+        return output[1] if len(output) > 1 else "Unknown"
+    except Exception as e:
+        return f"Error fetching Windows version: {e}"
+
+def get_gpu_info():
+    gpus = GPUtil.getGPUs()
+    gpu_info = []
+    for gpu in gpus:
+        gpu_info.append({
+            'name': gpu.name,
+            'driver_version': gpu.driver,
+            'memory_total': gpu.memoryTotal,
+            'memory_free': gpu.memoryFree,
+            'memory_used': gpu.memoryUsed,
+            'load': gpu.load * 100
+        })
+    return gpu_info
+
+def get_cpu_name():
+    try:
+        output = subprocess.check_output("wmic cpu get Name", shell=True).decode().strip().split('\n')
+        return output[1] if len(output) > 1 else "Unknown"
+    except Exception as e:
+        return f"Error fetching CPU name: {e}"
+
+def get_system_info():
+    info = {}
+    
+    # Operating System
+    info['OS'] = platform.system()
+    info['OS Version'] = get_windows_version()
+    info['OS Release'] = platform.release()
+    
+    # Machine and Processor
+    info['Machine'] = platform.machine()
+    info['Processor'] = get_cpu_name()
+    info['Architecture'] = platform.architecture()[0]
+    
+    # CPU Information
+    info['CPU Cores'] = psutil.cpu_count(logical=False)
+    info['Logical CPUs'] = psutil.cpu_count(logical=True)
+    info['Max CPU Frequency'] = psutil.cpu_freq().max
+    info['Min CPU Frequency'] = psutil.cpu_freq().min
+    info['Current CPU Frequency'] = psutil.cpu_freq().current
+    info['CPU Usage'] = psutil.cpu_percent(interval=1)
+    
+    # Memory Information
+    virtual_mem = psutil.virtual_memory()
+    info['Total Memory'] = virtual_mem.total
+    info['Available Memory'] = virtual_mem.available
+    info['Used Memory'] = virtual_mem.used
+    info['Memory Usage'] = virtual_mem.percent
+    
+    # Disk Information
+    disk_usage = psutil.disk_usage('/')
+    info['Total Disk Space'] = disk_usage.total
+    info['Used Disk Space'] = disk_usage.used
+    info['Free Disk Space'] = disk_usage.free
+    info['Disk Usage'] = disk_usage.percent
+    
+    # GPU Information
+    gpu_info = get_gpu_info()
+    if gpu_info:
+        info['GPU'] = gpu_info[0]['name']
+        info['GPU Driver Version'] = gpu_info[0]['driver_version']
+        info['GPU Memory Total'] = gpu_info[0]['memory_total']
+        info['GPU Memory Free'] = gpu_info[0]['memory_free']
+        info['GPU Memory Used'] = gpu_info[0]['memory_used']
+        info['GPU Load'] = gpu_info[0]['load']
+    else:
+        info['GPU'] = "No GPU detected"
+    
+    return info
+
+def display_system_info(info):
+    print("System Information")
+    print("==================")
+    for key, value in info.items():
+        if isinstance(value, (int, float)):
+            if key.lower().endswith("memory") or key.lower().endswith("space"):
+                print(f"{key}: {value / (1024 ** 3):.2f} GB")
+            elif key.lower().startswith("cpu") and key.endswith("Frequency"):
+                print(f"{key}: {value:.2f} MHz")
+            elif key.lower().endswith("usage") or key.lower().endswith("load"):
+                print(f"{key}: {value:.2f} %")
+            else:
+                print(f"{key}: {value}")
+        else:
+            print(f"{key}: {value}")
+
+if __name__ == "__main__":
+    system_info = get_system_info()
+    display_system_info(system_info)
