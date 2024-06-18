@@ -29,7 +29,7 @@ This Python script gathers and displays detailed specifications about your PC, i
  ## Usage
 Clone the repository or download the script to your local machine:
 
--git clone [https://](https://github.com/Longno12/System-Infomation)
+git clone https://github.com/Longno12/System-Infomation.git
 cd pc-specs-viewer
 
 Run the script: - python pc_specs_viewer.py
