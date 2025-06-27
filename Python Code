@@ -2,100 +2,530 @@ import platform
 import psutil
 import subprocess
 import GPUtil
+import socket
+import os
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QTabWidget, QVBoxLayout, QWidget, QLabel,  QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView, QPushButton, QFileDialog, QHBoxLayout, QGroupBox)
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QFont, QColor
+import json
+import datetime
 
-def get_windows_version():
-    try:
-        output = subprocess.check_output("wmic os get Caption", shell=True).decode().strip().split('\n')
-        return output[1] if len(output) > 1 else "Unknown"
-    except Exception as e:
-        return f"Error fetching Windows version: {e}"
-
-def get_gpu_info():
-    gpus = GPUtil.getGPUs()
-    gpu_info = []
-    for gpu in gpus:
-        gpu_info.append({
-            'name': gpu.name,
-            'driver_version': gpu.driver,
-            'memory_total': gpu.memoryTotal,
-            'memory_free': gpu.memoryFree,
-            'memory_used': gpu.memoryUsed,
-            'load': gpu.load * 100
-        })
-    return gpu_info
-
-def get_cpu_name():
-    try:
-        output = subprocess.check_output("wmic cpu get Name", shell=True).decode().strip().split('\n')
-        return output[1] if len(output) > 1 else "Unknown"
-    except Exception as e:
-        return f"Error fetching CPU name: {e}"
-
-def get_system_info():
-    info = {}
+class SystemInfoApp(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Advanced System Information")
+        self.setGeometry(100, 100, 900, 700)
+        
+        # Dark theme palette
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #2D2D2D;
+            }
+            QLabel, QGroupBox {
+                color: #E0E0E0;
+            }
+            QGroupBox {
+                border: 1px solid #444;
+                border-radius: 5px;
+                margin-top: 10px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 3px;
+            }
+            QTableWidget {
+                background-color: #3D3D3D;
+                color: #E0E0E0;
+                border: 1px solid #444;
+                gridline-color: #444;
+            }
+            QHeaderView::section {
+                background-color: #444;
+                color: white;
+                padding: 4px;
+                border: 1px solid #555;
+            }
+            QProgressBar {
+                border: 1px solid #444;
+                text-align: center;
+                color: white;
+                border-radius: 3px;
+            }
+            QProgressBar::chunk {
+                background-color: #4CAF50;
+                border-radius: 3px;
+            }
+            QPushButton {
+                background-color: #444;
+                color: white;
+                border: none;
+                padding: 5px 10px;
+                border-radius: 3px;
+            }
+            QPushButton:hover {
+                background-color: #555;
+            }
+        """)
+        
+        self.central_widget = QWidget()
+        self.setCentralWidget(self.central_widget)      
+        self.layout = QVBoxLayout(self.central_widget)
+        self.system_root = os.environ.get('SystemDrive', '') + '\\' if platform.system() == "Windows" else '/'
+        self.tabs = QTabWidget()
+        self.layout.addWidget(self.tabs)
+        self.create_summary_tab()
+        self.create_cpu_tab()
+        self.create_memory_tab()
+        self.create_disk_tab()
+        self.create_gpu_tab()
+        self.create_network_tab()
+        self.export_btn = QPushButton("Export System Info")
+        self.export_btn.clicked.connect(self.export_system_info)
+        self.layout.addWidget(self.export_btn)
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.update_real_time_data)
+        self.timer.start(2000)
+        psutil.cpu_percent(interval=None)
+        psutil.cpu_percent(interval=None, percpu=True)
+        self.update_all_data()
     
-    # Operating System
-    info['OS'] = platform.system()
-    info['OS Version'] = get_windows_version()
-    info['OS Release'] = platform.release()
+    def create_summary_tab(self):
+        self.summary_tab = QWidget()
+        self.tabs.addTab(self.summary_tab, "Summary")        
+        layout = QVBoxLayout(self.summary_tab)       
+        sys_group = QGroupBox("System Overview")
+        sys_layout = QVBoxLayout()
+        self.os_label = QLabel()
+        self.cpu_label = QLabel()
+        self.ram_label = QLabel()
+        self.gpu_label = QLabel()
+        self.disk_label = QLabel()
+        sys_layout.addWidget(self.os_label)
+        sys_layout.addWidget(self.cpu_label)
+        sys_layout.addWidget(self.ram_label)
+        sys_layout.addWidget(self.gpu_label)
+        sys_layout.addWidget(self.disk_label)
+        sys_group.setLayout(sys_layout)
+        layout.addWidget(sys_group)        
+        perf_group = QGroupBox("Performance")
+        perf_layout = QVBoxLayout()        
+        self.cpu_usage_label = QLabel("CPU Usage:")
+        self.cpu_usage_bar = QProgressBar()       
+        self.mem_usage_label = QLabel("Memory Usage:")
+        self.summary_mem_usage_bar = QProgressBar()         
+        self.disk_usage_label = QLabel("Disk Usage:")
+        self.disk_usage_bar = QProgressBar()
+        self.gpu_usage_label = QLabel("GPU Usage:")
+        self.summary_gpu_usage_bar = QProgressBar()    
+        perf_layout.addWidget(self.cpu_usage_label)
+        perf_layout.addWidget(self.cpu_usage_bar)
+        perf_layout.addWidget(self.mem_usage_label)
+        perf_layout.addWidget(self.summary_mem_usage_bar)
+        perf_layout.addWidget(self.disk_usage_label)
+        perf_layout.addWidget(self.disk_usage_bar)
+        perf_layout.addWidget(self.gpu_usage_label)
+        perf_layout.addWidget(self.summary_gpu_usage_bar)   
+        perf_group.setLayout(perf_layout)
+        layout.addWidget(perf_group)    
+        layout.addStretch()
     
-    # Machine and Processor
-    info['Machine'] = platform.machine()
-    info['Processor'] = get_cpu_name()
-    info['Architecture'] = platform.architecture()[0]
+    def create_cpu_tab(self):
+        self.cpu_tab = QWidget()
+        self.tabs.addTab(self.cpu_tab, "CPU")
+        layout = QVBoxLayout(self.cpu_tab)       
+        info_group = QGroupBox("CPU Information")
+        info_layout = QVBoxLayout()
+        self.cpu_name_label = QLabel()
+        self.cpu_cores_label = QLabel()
+        self.cpu_arch_label = QLabel()
+        self.cpu_freq_label = QLabel()
+        info_layout.addWidget(self.cpu_name_label)
+        info_layout.addWidget(self.cpu_cores_label)
+        info_layout.addWidget(self.cpu_arch_label)
+        info_layout.addWidget(self.cpu_freq_label)
+        info_group.setLayout(info_layout)
+        layout.addWidget(info_group)       
+        usage_group = QGroupBox("CPU Usage")
+        usage_layout = QVBoxLayout()
+        self.cpu_usage_table = QTableWidget()
+        self.cpu_usage_table.setColumnCount(2)
+        self.cpu_usage_table.setHorizontalHeaderLabels(["Core", "Usage %"])
+        self.cpu_usage_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        usage_layout.addWidget(self.cpu_usage_table)
+        usage_group.setLayout(usage_layout)
+        layout.addWidget(usage_group)     
+        layout.addStretch()
     
-    # CPU Information
-    info['CPU Cores'] = psutil.cpu_count(logical=False)
-    info['Logical CPUs'] = psutil.cpu_count(logical=True)
-    info['Max CPU Frequency'] = psutil.cpu_freq().max
-    info['Min CPU Frequency'] = psutil.cpu_freq().min
-    info['Current CPU Frequency'] = psutil.cpu_freq().current
-    info['CPU Usage'] = psutil.cpu_percent(interval=1)
+    def create_memory_tab(self):
+        self.memory_tab = QWidget()
+        self.tabs.addTab(self.memory_tab, "Memory")
+        layout = QVBoxLayout(self.memory_tab)      
+        info_group = QGroupBox("Memory Information")
+        info_layout = QVBoxLayout()
+        self.mem_total_label = QLabel()
+        self.mem_available_label = QLabel()
+        self.mem_used_label = QLabel()
+        self.mem_percent_label = QLabel()
+        self.swap_total_label = QLabel()
+        self.swap_used_label = QLabel()
+        info_layout.addWidget(self.mem_total_label)
+        info_layout.addWidget(self.mem_available_label)
+        info_layout.addWidget(self.mem_used_label)
+        info_layout.addWidget(self.mem_percent_label)
+        info_layout.addWidget(self.swap_total_label)
+        info_layout.addWidget(self.swap_used_label)
+        info_group.setLayout(info_layout)
+        layout.addWidget(info_group)    
+        vis_group = QGroupBox("Memory Usage")
+        vis_layout = QVBoxLayout()
+        self.mem_tab_usage_bar = QProgressBar()
+        self.mem_tab_usage_bar.setTextVisible(True)
+        vis_layout.addWidget(self.mem_tab_usage_bar)
+        vis_group.setLayout(vis_layout)
+        layout.addWidget(vis_group)     
+        layout.addStretch()
     
-    # Memory Information
-    virtual_mem = psutil.virtual_memory()
-    info['Total Memory'] = virtual_mem.total
-    info['Available Memory'] = virtual_mem.available
-    info['Used Memory'] = virtual_mem.used
-    info['Memory Usage'] = virtual_mem.percent
+    def create_disk_tab(self):
+        self.disk_tab = QWidget()
+        self.tabs.addTab(self.disk_tab, "Disk")
+        layout = QVBoxLayout(self.disk_tab)    
+        info_group = QGroupBox("Disk Information")
+        info_layout = QVBoxLayout()
+        self.disk_table = QTableWidget()
+        self.disk_table.setColumnCount(6)
+        self.disk_table.setHorizontalHeaderLabels(["Device", "Total", "Used", "Free", "Usage %", "Type"])
+        self.disk_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        info_layout.addWidget(self.disk_table)
+        info_group.setLayout(info_layout)
+        layout.addWidget(info_group)   
+        layout.addStretch()
     
-    # Disk Information
-    disk_usage = psutil.disk_usage('/')
-    info['Total Disk Space'] = disk_usage.total
-    info['Used Disk Space'] = disk_usage.used
-    info['Free Disk Space'] = disk_usage.free
-    info['Disk Usage'] = disk_usage.percent
+    def create_gpu_tab(self):
+        self.gpu_tab = QWidget()
+        self.tabs.addTab(self.gpu_tab, "GPU")
+        layout = QVBoxLayout(self.gpu_tab)    
+        info_group = QGroupBox("GPU Information")
+        info_layout = QVBoxLayout()
+        self.gpu_table = QTableWidget()
+        self.gpu_table.setColumnCount(6)
+        self.gpu_table.setHorizontalHeaderLabels(["Name", "Driver", "Memory Total", "Memory Used", "Memory Free", "Load %"])
+        self.gpu_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        info_layout.addWidget(self.gpu_table)
+        info_group.setLayout(info_layout)
+        layout.addWidget(info_group)  
+        layout.addStretch()
     
-    # GPU Information
-    gpu_info = get_gpu_info()
-    if gpu_info:
-        info['GPU'] = gpu_info[0]['name']
-        info['GPU Driver Version'] = gpu_info[0]['driver_version']
-        info['GPU Memory Total'] = gpu_info[0]['memory_total']
-        info['GPU Memory Free'] = gpu_info[0]['memory_free']
-        info['GPU Memory Used'] = gpu_info[0]['memory_used']
-        info['GPU Load'] = gpu_info[0]['load']
-    else:
-        info['GPU'] = "No GPU detected"
+    def create_network_tab(self):
+        self.network_tab = QWidget()
+        self.tabs.addTab(self.network_tab, "Network")
+        layout = QVBoxLayout(self.network_tab)     
+        info_group = QGroupBox("Network Information")
+        info_layout = QVBoxLayout()
+        self.network_table = QTableWidget()
+        self.network_table.setColumnCount(4)
+        self.network_table.setHorizontalHeaderLabels(["Interface", "IP Address", "MAC Address", "Status"])
+        self.network_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        info_layout.addWidget(self.network_table)
+        info_group.setLayout(info_layout)
+        layout.addWidget(info_group)    
+        layout.addStretch()
     
-    return info
-
-def display_system_info(info):
-    print("System Information")
-    print("==================")
-    for key, value in info.items():
-        if isinstance(value, (int, float)):
-            if key.lower().endswith("memory") or key.lower().endswith("space"):
-                print(f"{key}: {value / (1024 ** 3):.2f} GB")
-            elif key.lower().startswith("cpu") and key.endswith("Frequency"):
-                print(f"{key}: {value:.2f} MHz")
-            elif key.lower().endswith("usage") or key.lower().endswith("load"):
-                print(f"{key}: {value:.2f} %")
-            else:
-                print(f"{key}: {value}")
+    def update_all_data(self):
+        self.update_system_info()
+        self.update_cpu_info()
+        self.update_memory_info()
+        self.update_disk_info()
+        self.update_gpu_info()
+        self.update_network_info()
+        self.update_real_time_data()
+    
+    def update_real_time_data(self):
+        self.update_cpu_usage()
+        self.update_memory_usage()
+        self.update_disk_usage()
+        self.update_gpu_info()
+    
+    def update_system_info(self):
+        os_name = platform.system()
+        os_version = self.get_windows_version() if os_name == "Windows" else platform.version()
+        self.os_label.setText(f"OS: {os_name} {platform.release()} ({os_version})")       
+        self.cpu_label.setText(f"CPU: {self.get_cpu_name()}")     
+        mem = psutil.virtual_memory()
+        self.ram_label.setText(f"RAM: {self.format_bytes(mem.total)}")   
+        gpus = self.get_gpu_info()
+        if gpus:
+            self.gpu_label.setText(f"GPU: {gpus[0]['name']} ({self.format_bytes(gpus[0]['memory_total'] * 1024 * 1024)} VRAM)")
         else:
-            print(f"{key}: {value}")
+            self.gpu_label.setText("GPU: Not detected")
+        disk = psutil.disk_usage(self.system_root)
+        self.disk_label.setText(f"System Disk: {self.format_bytes(disk.total)} total")
+    
+    def update_cpu_info(self):
+        self.cpu_name_label.setText(f"Name: {self.get_cpu_name()}")
+        self.cpu_cores_label.setText(f"Cores: {psutil.cpu_count(logical=False)} physical, {psutil.cpu_count(logical=True)} logical")
+        self.cpu_arch_label.setText(f"Architecture: {platform.architecture()[0]}")   
+        try:
+            freq = psutil.cpu_freq()
+            self.cpu_freq_label.setText(f"Frequency: {freq.current:.2f} MHz (Max: {freq.max:.2f} MHz)")
+        except Exception:
+            self.cpu_freq_label.setText("Frequency: Information not available")   
+        self.update_cpu_usage()
+    
+    def update_cpu_usage(self):
+        cpu_percent = psutil.cpu_percent(interval=None)
+        self.cpu_usage_label.setText(f"CPU Usage: {cpu_percent:.1f}%")
+        self.cpu_usage_bar.setValue(int(cpu_percent))       
+        core_percents = psutil.cpu_percent(interval=None, percpu=True)
+        self.cpu_usage_table.setRowCount(len(core_percents))    
+        for i, percent in enumerate(core_percents):
+            self.cpu_usage_table.setItem(i, 0, QTableWidgetItem(f"Core {i + 1}"))
+            self.cpu_usage_table.setItem(i, 1, QTableWidgetItem(f"{percent:.1f}%"))
+            item = self.cpu_usage_table.item(i, 1)
+            if percent > 80:
+                item.setForeground(QColor(255, 100, 100)) # Red
+            elif percent > 60:
+                item.setForeground(QColor(255, 200, 100)) # Orange
+            else:
+                item.setForeground(QColor(100, 255, 100)) # Green
+    
+    def update_memory_info(self):
+        mem = psutil.virtual_memory()
+        swap = psutil.swap_memory()     
+        self.mem_total_label.setText(f"Total: {self.format_bytes(mem.total)}")
+        self.mem_available_label.setText(f"Available: {self.format_bytes(mem.available)}")
+        self.mem_used_label.setText(f"Used: {self.format_bytes(mem.used)}")
+        self.mem_percent_label.setText(f"Usage: {mem.percent}%")   
+        if swap.total > 0:
+            self.swap_total_label.setText(f"Swap Total: {self.format_bytes(swap.total)}")
+            self.swap_used_label.setText(f"Swap Used: {self.format_bytes(swap.used)} ({swap.percent}%)")
+        else:
+            self.swap_total_label.setText("Swap: Not available")
+            self.swap_used_label.setText("")    
+        self.update_memory_usage()
+ 
+    def update_memory_usage(self):
+        mem = psutil.virtual_memory()
+        self.mem_usage_label.setText(f"Memory Usage: {mem.percent:.1f}%")
+        self.summary_mem_usage_bar.setValue(int(mem.percent))
+        self.mem_tab_usage_bar.setValue(int(mem.percent))
+        self.mem_tab_usage_bar.setFormat(f"Used: {self.format_bytes(mem.used)} / {self.format_bytes(mem.total)} ({mem.percent}%)")
+
+    
+    def update_disk_info(self):
+        partitions = psutil.disk_partitions()
+        self.disk_table.setRowCount(len(partitions))     
+        for i, partition in enumerate(partitions):
+            try:
+                usage = psutil.disk_usage(partition.mountpoint)              
+                self.disk_table.setItem(i, 0, QTableWidgetItem(partition.device))
+                self.disk_table.setItem(i, 1, QTableWidgetItem(self.format_bytes(usage.total)))
+                self.disk_table.setItem(i, 2, QTableWidgetItem(self.format_bytes(usage.used)))
+                self.disk_table.setItem(i, 3, QTableWidgetItem(self.format_bytes(usage.free)))
+                self.disk_table.setItem(i, 4, QTableWidgetItem(f"{usage.percent:.1f}%"))
+                self.disk_table.setItem(i, 5, QTableWidgetItem(partition.fstype))           
+                if usage.percent > 90:
+                    color = QColor(255, 100, 100)
+                elif usage.percent > 80:
+                    color = QColor(255, 200, 100)
+                else:
+                    continue
+                
+                for col in range(6):
+                    self.disk_table.item(i, col).setForeground(color)
+            except Exception:
+                self.disk_table.setItem(i, 0, QTableWidgetItem(partition.device))
+                self.disk_table.setItem(i, 1, QTableWidgetItem("N/A (access error)"))
+                continue      
+        self.update_disk_usage()
+    
+    def update_disk_usage(self):
+        usage = psutil.disk_usage(self.system_root)
+        self.disk_usage_label.setText(f"Disk Usage ({self.system_root}): {usage.percent:.1f}%")
+        self.disk_usage_bar.setValue(int(usage.percent))
+    
+    def update_gpu_info(self):
+        gpus = self.get_gpu_info()
+        self.gpu_table.setRowCount(len(gpus))      
+        for i, gpu in enumerate(gpus):
+            self.gpu_table.setItem(i, 0, QTableWidgetItem(gpu['name']))
+            self.gpu_table.setItem(i, 1, QTableWidgetItem(str(gpu['driver_version'])))
+            self.gpu_table.setItem(i, 2, QTableWidgetItem(f"{gpu['memory_total']:.0f} MB"))
+            self.gpu_table.setItem(i, 3, QTableWidgetItem(f"{gpu['memory_used']:.0f} MB"))
+            self.gpu_table.setItem(i, 4, QTableWidgetItem(f"{gpu['memory_free']:.0f} MB"))
+            self.gpu_table.setItem(i, 5, QTableWidgetItem(f"{gpu['load']:.1f}%"))      
+            if gpu['load'] > 80:
+                color = QColor(255, 100, 100)
+            elif gpu['load'] > 60:
+                color = QColor(255, 200, 100)
+            else:
+                continue
+            for col in range(6):
+                self.gpu_table.item(i, col).setForeground(color)
+        if gpus:
+            self.gpu_usage_label.setText(f"GPU Usage: {gpus[0]['load']:.1f}%")
+            self.summary_gpu_usage_bar.setValue(int(gpus[0]['load']))
+        else:
+            self.gpu_usage_label.setText("GPU Usage: N/A")
+            self.summary_gpu_usage_bar.setValue(0)
+    
+    def update_network_info(self):
+        net_info = psutil.net_if_addrs()
+        net_stats = psutil.net_if_stats()     
+        row = 0
+        self.network_table.setRowCount(len(net_info))
+        for interface, addrs in net_info.items():
+            ip_addr, mac_addr = "", ""      
+            for addr in addrs:
+                if addr.family == socket.AF_INET:
+                    ip_addr = addr.address
+                elif addr.family == getattr(socket, 'AF_PACKET', 17): 
+                    mac_addr = addr.address   
+            status = "Up" if interface in net_stats and net_stats[interface].isup else "Down"        
+            self.network_table.setItem(row, 0, QTableWidgetItem(interface))
+            self.network_table.setItem(row, 1, QTableWidgetItem(ip_addr))
+            self.network_table.setItem(row, 2, QTableWidgetItem(mac_addr))
+            self.network_table.setItem(row, 3, QTableWidgetItem(status))       
+            if status == "Up":
+                self.network_table.item(row, 3).setForeground(QColor(100, 255, 100))
+            else:
+                self.network_table.item(row, 3).setForeground(QColor(255, 100, 100))
+            row += 1
+
+    def get_windows_version(self):
+        try:
+            output = subprocess.check_output("wmic os get Caption", shell=True, stderr=subprocess.DEVNULL).decode().strip().split('\n')
+            return output[1].strip() if len(output) > 1 else "Unknown"
+        except Exception:
+            return "N/A"
+    
+    def get_gpu_info(self):
+        try:
+            gpus = GPUtil.getGPUs()
+            return [{
+                'name': gpu.name, 'driver_version': gpu.driver, 'memory_total': gpu.memoryTotal,
+                'memory_free': gpu.memoryFree, 'memory_used': gpu.memoryUsed, 'load': gpu.load * 100
+            } for gpu in gpus]
+        except Exception:
+            return []
+    
+    def get_cpu_name(self):
+        try:
+            if platform.system() == "Windows":
+                output = subprocess.check_output("wmic cpu get Name", shell=True, stderr=subprocess.DEVNULL).decode().strip().split('\n')
+                return output[1].strip() if len(output) > 1 else platform.processor()
+            elif platform.system() == "Linux":
+                with open('/proc/cpuinfo', 'r') as f:
+                    for line in f:
+                        if line.startswith('model name'):
+                            return line.split(':', 1)[1].strip()
+            return platform.processor()
+        except Exception:
+            return platform.processor()
+    
+    def format_bytes(self, size):
+        if not isinstance(size, (int, float)) or size < 0: return "N/A"
+        power = 1024
+        n = 0
+        power_labels = {0: 'B', 1: 'KB', 2: 'MB', 3: 'GB', 4: 'TB'}
+        while size >= power and n < len(power_labels) - 1:
+            size /= power
+            n += 1
+        return f"{size:.2f} {power_labels[n]}"
+    
+    def export_system_info(self):
+        options = QFileDialog.Options()
+        file_name, _ = QFileDialog.getSaveFileName(self, "Save System Info", "system_info", "JSON Files (*.json);;Text Files (*.txt)", options=options)
+        if file_name:
+            system_info = self.collect_all_info()
+            try:
+                with open(file_name, 'w') as f:
+                    if file_name.endswith('.json'):
+                        json.dump(system_info, f, indent=4)
+                    else:
+                        for category, data in system_info.items():
+                            f.write(f"=== {str(category).upper()} ===\n")
+                            if isinstance(data, dict):
+                                for key, value in data.items():
+                                    f.write(f"{key}: {value}\n")
+                            elif isinstance(data, list):
+                                for i, item in enumerate(data):
+                                    f.write(f"  --- Item {i+1} ---\n")
+                                    for key, value in item.items():
+                                        f.write(f"  {key}: {value}\n")
+                            else:
+                                f.write(f"{data}\n")
+                            f.write("\n")
+                
+                self.statusBar().showMessage(f"System info saved to {file_name}", 5000)
+            except Exception as e:
+                self.statusBar().showMessage(f"Error saving file: {str(e)}", 5000)
+    
+    def collect_all_info(self):
+        mem = psutil.virtual_memory()
+        swap = psutil.swap_memory()
+        freq = psutil.cpu_freq() if hasattr(psutil, 'cpu_freq') else None
+        
+        info = {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "system": {
+                "os": f"{platform.system()} {platform.release()}",
+                "os_version": self.get_windows_version() if platform.system() == "Windows" else platform.version(),
+                "machine": platform.machine(),
+                "processor": self.get_cpu_name(),
+                "architecture": platform.architecture()[0]
+            },
+            "cpu": {
+                "physical_cores": psutil.cpu_count(logical=False),
+                "logical_cores": psutil.cpu_count(logical=True),
+                "max_frequency_mhz": freq.max if freq else 'N/A',
+                "current_frequency_mhz": freq.current if freq else 'N/A',
+                "usage_per_core": psutil.cpu_percent(interval=0.1, percpu=True),
+                "total_usage": psutil.cpu_percent(interval=None)
+            },
+            "memory": {
+                "total": self.format_bytes(mem.total), "available": self.format_bytes(mem.available),
+                "used": self.format_bytes(mem.used), "percent": mem.percent
+            },
+            "swap_memory": {
+                "total": self.format_bytes(swap.total), "used": self.format_bytes(swap.used), "percent": swap.percent
+            },
+            "disks": [],
+            "gpus": self.get_gpu_info(),
+            "network": []
+        }
+        
+        for p in psutil.disk_partitions():
+            try:
+                usage = psutil.disk_usage(p.mountpoint)
+                info["disks"].append({
+                    "device": p.device, "mountpoint": p.mountpoint, "fstype": p.fstype,
+                    "total": self.format_bytes(usage.total), "used": self.format_bytes(usage.used),
+                    "free": self.format_bytes(usage.free), "percent": usage.percent
+                })
+            except Exception:
+                continue
+        
+        net_addrs = psutil.net_if_addrs()
+        net_stats = psutil.net_if_stats()
+        for iface, addrs in net_addrs.items():
+            iface_info = {"interface": iface, "status": "Up" if iface in net_stats and net_stats[iface].isup else "Down"}
+            for addr in addrs:
+                if addr.family == socket.AF_INET:
+                    iface_info["ip_address"] = addr.address
+                elif addr.family == getattr(socket, 'AF_PACKET', 17):
+                    iface_info["mac_address"] = addr.address
+            info["network"].append(iface_info)
+        
+        return info
 
 if __name__ == "__main__":
-    system_info = get_system_info()
-    display_system_info(system_info)
+    import sys
+    app = QApplication(sys.argv)
+    app.setStyle('Fusion') 
+    font = QFont()
+    font.setPointSize(10)
+    app.setFont(font)  
+    window = SystemInfoApp()
+    window.show()
+    sys.exit(app.exec_())
